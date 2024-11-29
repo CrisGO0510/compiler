@@ -1,5 +1,7 @@
 import sys
+import re
 from lark import Lark, tree, Tree, Token
+
 
 if(len(sys.argv) != 2):
     print(r'''
@@ -15,7 +17,7 @@ if(len(sys.argv) != 2):
     
 c_grammar = r"""
 
-    start: funcdef+
+start: funcdef+
 
     funcdef: "function" funcname "(" args ")" "{" block "}"
 
@@ -73,23 +75,47 @@ def get_operator_name(operator):
     return operator_map.get(operator, 'unknown')  # Devuelve 'unknown' si el operador no está en el diccionario
 
 
-temp_var_counter = 2 # Contador para las variables temporales (2 porque %1 esta reservado)
+def get_comparison_operator_name(operator):
+    # Diccionario que mapea operadores de comparación a nombres
+    comparison_operator_map = {
+        '==': 'icmp eq',
+        '!=': 'icmp ne',
+        '<': 'icmp slt',
+        '>': 'icmp sgt',
+        '<=': 'icmp sle',
+        '>=': 'icmp sge',
+    }
+    # Devolver el nombre correspondiente al operador de comparación
+    return comparison_operator_map.get(operator, 'unknown')  # Devuelve 'unknown' si el operador no está en el diccionario
+
+
+temp_var_counter = 0 # Contador para las variables temporales (2 porque %1 esta reservado)
 
 def get_temp_var():
     global temp_var_counter
+    if temp_var_counter == 1:
+        temp_var_counter += 1
     temp_var_counter += 1
     return f"%{temp_var_counter - 1}"
 
 def get_property(node, property_name):
+    matching_children = []  # Lista para almacenar coincidencias
     for child in node.children:
         # Verifica si el nodo es un Tree o un Token
         if isinstance(child, Tree):
             if child.data == property_name:  # Si es un Tree, accedes a 'data'
-                return child
+                matching_children.append(child)
         elif isinstance(child, Token):
             if child.type == property_name:  # Si es un Token, accedes a 'type'
-                return child
-    return None
+                matching_children.append(child)
+    
+    # Si solo hay un elemento, retornarlo directamente
+    if len(matching_children) == 1:
+        return matching_children[0]
+    
+    # Si hay más de uno, retornar la lista
+    return matching_children
+
 
 # Función para traducir el AST a código LLVM
 def translate_program(ast, out):
@@ -125,19 +151,14 @@ def translate_funcdef(ast, out, index):
     out.write(")")
     out.write(" #")
     out.write(str(index))
-    out.write(" {\nwrite:\n")
+    out.write(" {\n")
 
     # Reservamos la memoria de los argumentos y creamos los apuntadores
     for arg in arg_names:
         out.write("\t")
         temp_var = get_temp_var()
-        out.write(temp_var)
-        out.write(" = alloca i32, align 4\n")
-        out.write("\tstore i32 ")
-        out.write(arg[1])
-        out.write(", ptr ")
-        out.write(temp_var)
-        out.write(", align 4\n")
+        out.write(f"{temp_var} = alloca i32, align 4\n")
+        out.write(f"\tstore i32 {arg[1]}, ptr {temp_var}, align 4\n")
         # Actualizamos el valor de la variable temporal, ya que no podemos usar el argumento como variable
         arg[1] = temp_var
 
@@ -147,7 +168,7 @@ def translate_funcdef(ast, out, index):
         if child.data == "statement":
             translate_statement(child, out)
 
-    out.write("}\n")
+    out.write("}\n\n")
     global temp_var_counter
     temp_var_counter = 2
     arg_names = []
@@ -156,8 +177,8 @@ def translate_funcdef(ast, out, index):
 def translate_statement(statement, out):
     if statement.children[0].data == "return_stmt":
         translate_return_stmt(statement.children[0], out)
-    # elif ast.data == "if_stmt":
-    #     translate_if_stmt(ast, out)
+    elif statement.children[0].data == "if_stmt":
+        translate_if_stmt(statement.children[0], out)
     # elif ast.data == "expr":
     #     translate_expr(ast, out)
 
@@ -200,34 +221,69 @@ def translate_return_stmt(return_stmt, out):
         out.write(f"\tret i32 {final_var}\n")
 
 
+def translate_if_stmt(if_stmt, out):
+    condition = get_property(if_stmt, "condition")
+    blocks = get_property(if_stmt, "block")
+    return_var = get_temp_var()
+
+    out.write(f"\t{return_var} = alloca i32, align 4\n")
+
+    # Manejamos la condicional
+    condition_expr = translate_condition(condition, out)
+    print("Condition:", condition_expr)
+    
+    comp_var = get_temp_var()
+    label_var = [get_temp_var(), get_temp_var()]
+    out.write(f"\t{comp_var} = {get_comparison_operator_name(condition_expr[1])} i32 {condition_expr[0]}, {condition_expr[2]}\n")
+    out.write(f"\tbr i1 {comp_var}, label {label_var[0]}, label {label_var[1]}\n")
+
+    return_label = get_temp_var()
+
+    index = 0
+    # Manejamos los labels
+    for block in blocks:
+        if block.children[0].data == "statement":
+            if block.children[0].children[0].data == "return_stmt":
+                label_value = interpret_number(label_var[index])
+                out.write(f"\n{label_value}:\n")
+                out.write(f"\tstore i32 {index}, ptr {return_var}, align 4\n")
+                out.write(f"\tbr label {return_label}\n")
+                index += 1
+
+    temp_var = get_temp_var()
+    out.write(f"\n{interpret_number(return_label)}:\n")
+    out.write(f"\t{temp_var} = load i32, ptr {return_var}, align 4\n")
+    out.write(f"\tret i32 {temp_var}\n")
+
+    # # Manejamos los bloques
+    # for block in blocks:
+    #     if block.children[0].data == "statement":
+    #         translate_statement(block.children[0], out)
+
+
+def interpret_number(str):
+    return int(re.search(r'\d+', str).group(0)) if re.search(r'\d+', str) else 0
+
+
 def translate_expr(expr, out):
     expr_def = []
     for child in expr.children:
         if isinstance(child, Tree):  # Es un "term"
-            print("Esta expresión es un árbol (Tree):", child.data)
             expr_def.append(translate_term(child, out))
 
         elif isinstance(child, Token):  # Es un operador de suma o resta
-            print("Esta expresión es un token (Token):")
-            print("\tTipo:", child.type)  # Ejemplo: PLUS
-            print("\tValor:", child.value)  # Ejemplo: "+"
             expr_def.append(child.value)
         else:
             print("Tipo inesperado de expresión:", type(child))
 
-    # print("EEEEEE:", expr_def)
     return expr_def
 
 def translate_term(term, out):
     term_def = []
     for child in term.children:
         if isinstance(child, Tree):  # Es un "factor"
-            print("Este término es un árbol (Tree):", child.data)
             term_def.append(translate_factor(child, out))
         elif isinstance(child, Token): # Es un operador de multiplicación o división
-            print("Este término es un token (Token):")
-            print("\tTipo:", child.type)
-            print("\tValor:", child.value)
             term_def.append(child.value)
         else:
             print("Tipo inesperado de término:", type(child))
@@ -247,13 +303,12 @@ def translate_factor(factor, out):
                 # Manejo de llamadas a funciones
                 function_name = get_property(child, "name").children[0].children[0].value
 
-                args_values = [translate_expr(arg, out) for arg in child.children if isinstance(arg, Tree) and arg.data == "expr"]
+                # args_values = [translate_expr(arg, out) for arg in child.children if isinstance(arg, Tree) and arg.data == "expr"]
+                args_values = get_property(child, "expr")
 
                 args_values = [str(translate_expr(arg, out)[0]) for arg in child.children if isinstance(arg, Tree) and arg.data == "expr"]
 
                 args_string = ", ".join(f"i32 noundef {arg}" for arg in args_values)
-
-                print("AAAAA:", args_string)
 
                 temp_var = get_temp_var()
                 out.write(f"\t{temp_var} = call i32 @{function_name}({args_string})\n")
@@ -278,8 +333,20 @@ def translate_factor(factor, out):
         elif isinstance(child, Token):
             if child.type == "NUMBER":
                 return child.value
-
     return None  # Por defecto, si no encuentra nada
+
+
+def translate_condition(cond, out):
+    def_condition = []
+    for child in cond.children:
+        if isinstance(child, Tree):
+            if child.data == "expr":
+                def_condition.append(translate_expr(child, out)[0])
+        elif isinstance(child, Token):
+            print("\tValor:", child.value)
+            def_condition.append(child.value)
+    return def_condition
+
 
 input = sys.argv[1]
 output = "program.ll"

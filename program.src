@@ -1,7 +1,11 @@
-function constant(x) {
-  return x + 3 * (4 + x);
+function mayor3(x) {
+    if(x >= 3){
+        return 1;
+    } else {
+        return 0;
+    }
 }
 
 function main() {
-  return constant(43);
+  return mayor3(2);
 }
