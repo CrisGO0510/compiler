@@ -110,8 +110,6 @@ def translate_funcdef(ast, out, index):
     global arg_names
     arg_names = [[arg.children[0].value, get_temp_var()] for arg in arguments.children]
     
-    print("arg_names:", arg_names)
-
     # Escribir la definición de la función
 
     out.write("define dso_local i32 @")
@@ -165,15 +163,12 @@ def translate_statement(statement, out):
 
 def traverse_expression(exp, translated_expressions):
     for e in exp:
+        print("EXP:", e, isinstance(e, list))
         if isinstance(e, list):
             # Llamada recursiva, pasando `translated_expressions` como parámetro
             traverse_expression(e, translated_expressions)
-            print("List:", e)
-
             for arg in translated_expressions:
-                print("ARG:", arg[0])
                 if arg[0] in e:
-                    print("AAAAAAAA:", arg)
                     e[e.index(arg[0])] = arg[1]
 
             translated_expressions.append([e, get_temp_var()])
@@ -185,6 +180,11 @@ def translate_return_stmt(return_stmt, out):
     print("Return statement:", return_expr)
 
     transformed_expressions = []
+
+    # Si la expresión de retorno es un solo número
+    if len(return_expr) == 1:
+        out.write(f"\tret i32 {return_expr[0]}\n")
+        return
 
     traverse_expression([return_expr], transformed_expressions)
     print("translated_expressions:", transformed_expressions)
@@ -198,9 +198,6 @@ def translate_return_stmt(return_stmt, out):
 
     if final_var:
         out.write(f"\tret i32 {final_var}\n")
-
-    # out.write(f"\t{temp_var} = load i32, ptr {var}, align 4\n")
-
 
 
 def translate_expr(expr, out):
@@ -248,9 +245,20 @@ def translate_factor(factor, out):
         if isinstance(child, Tree):
             if child.data == "func_call":
                 # Manejo de llamadas a funciones
-                funcname = get_property(child, "name")
-                args = get_property(child, "expr")
-                translate_expr(args, out)
+                function_name = get_property(child, "name").children[0].children[0].value
+
+                args_values = [translate_expr(arg, out) for arg in child.children if isinstance(arg, Tree) and arg.data == "expr"]
+
+                args_values = [str(translate_expr(arg, out)[0]) for arg in child.children if isinstance(arg, Tree) and arg.data == "expr"]
+
+                args_string = ", ".join(f"i32 noundef {arg}" for arg in args_values)
+
+                print("AAAAA:", args_string)
+
+                temp_var = get_temp_var()
+                out.write(f"\t{temp_var} = call i32 @{function_name}({args_string})\n")
+
+                return temp_var
 
             elif child.data == "word":
                 # Buscar el nombre de la variable en los argumentos
@@ -274,7 +282,7 @@ def translate_factor(factor, out):
     return None  # Por defecto, si no encuentra nada
 
 input = sys.argv[1]
-output = sys.argv[1] + str(".ll")
+output = "program.ll"
 print("Input file: ", input)
 parser = Lark(c_grammar, start='start', keep_all_tokens=True)
 

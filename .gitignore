@@ -1,0 +1,11 @@
+# Ignorar archivos PNG
+*.png
+
+# Ignorar archivos LL
+*.ll
+
+# Ignorar archivos dot
+*.dot
+
+# Ignorar archivos exe
+*.exe
