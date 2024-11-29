@@ -1,0 +1,13 @@
+clang .\program.ll -o program.exe
+.\program.exe
+echo $LastExitCode
+
+
+{
+    "key": "f6",
+    "command": "workbench.action.terminal.sendSequence",
+    "args": {
+        "text": "python ${file} program.src\n"
+    },
+    "when": "editorTextFocus && editorLangId == 'python'"
+}
