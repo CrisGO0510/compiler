@@ -1,7 +1,7 @@
 function constant(x) {
-  return x;
+  return x + 3 * (2 + x);
 }
 
 function main() {
-  constant(42);
+  return constant(42);
 }
