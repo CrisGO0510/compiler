@@ -3,8 +3,8 @@ from lark import Lark, tree, Tree, Token
 
 if(len(sys.argv) != 2):
     print(r'''
-          // Wrong number of parameters!      \\
-          \\ python hlogoc.py inputfile.hlogo //
+          // Wrong number of parameters!\\
+          \\ python cmplc.py program.src//
           -------------------------------------
           \   ^__^ 
           \  (oo)\_______
