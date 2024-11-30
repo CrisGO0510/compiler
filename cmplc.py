@@ -17,7 +17,7 @@ if(len(sys.argv) != 2):
     
 c_grammar = r"""
 
-start: funcdef+
+    start: funcdef+
 
     funcdef: "function" funcname "(" args ")" "{" block "}"
 
@@ -31,7 +31,7 @@ start: funcdef+
             | ";"             // Para permitir líneas vacías
 
     if_stmt: "if" "(" condition ")" "{" block "}"
-            | "if" "(" condition ")" "{" block "}" "else" "{" block "}"
+        | "if" "(" condition ")" "{" block "}" "else" "{" block "}"
 
     condition: expr ("==" | "!=" | "<" | ">" | "<=" | ">=") expr
 
@@ -58,7 +58,8 @@ start: funcdef+
     NUMBER: /[0-9]+/
 
     %ignore " "       // Ignorar espacios simples
-    %ignore /\r?\n/   // Ignorar saltos de línea    
+    %ignore /\r?\n/   // Ignorar saltos de línea
+    %ignore /\/\/.*/
 
 """
 
@@ -133,11 +134,13 @@ def translate_funcdef(ast, out, index):
 
     # Extrae los nombres de los argumentos
     arguments = get_property(ast, "args")
-    global arg_names
-    arg_names = [[arg.children[0].value, get_temp_var()] for arg in arguments.children]
     
+    global arg_names
+    for arg in arguments.children:
+        if isinstance(arg, Tree):
+            arg_names.append([arg.children[0].value, get_temp_var()])
+        
     # Escribir la definición de la función
-
     out.write("define dso_local i32 @")
     out.write(function_name)
 
@@ -166,7 +169,7 @@ def translate_funcdef(ast, out, index):
     block = get_property(ast, "block")
     for child in block.children:
         if child.data == "statement":
-            translate_statement(child, out)
+            out.write(f"\tret i32 {translate_statement(child, out)}\n")
 
     out.write("}\n\n")
     global temp_var_counter
@@ -176,15 +179,13 @@ def translate_funcdef(ast, out, index):
 
 def translate_statement(statement, out):
     if statement.children[0].data == "return_stmt":
-        translate_return_stmt(statement.children[0], out)
+        return translate_return_stmt(statement.children[0], out)
     elif statement.children[0].data == "if_stmt":
-        translate_if_stmt(statement.children[0], out)
-    # elif ast.data == "expr":
-    #     translate_expr(ast, out)
+        return translate_if_stmt(statement.children[0], out)
+
 
 def traverse_expression(exp, translated_expressions):
     for e in exp:
-        print("EXP:", e, isinstance(e, list))
         if isinstance(e, list):
             # Llamada recursiva, pasando `translated_expressions` como parámetro
             traverse_expression(e, translated_expressions)
@@ -198,17 +199,14 @@ def traverse_expression(exp, translated_expressions):
 def translate_return_stmt(return_stmt, out):
     expr_children = get_property(return_stmt, "expr")
     return_expr = translate_expr(expr_children, out)
-    print("Return statement:", return_expr)
 
     transformed_expressions = []
 
-    # Si la expresión de retorno es un solo número
-    if len(return_expr) == 1:
-        out.write(f"\tret i32 {return_expr[0]}\n")
-        return
+    # Si la expresión de retorno es una variable
+    if isinstance(return_expr, str):
+        return return_expr
 
     traverse_expression([return_expr], transformed_expressions)
-    print("translated_expressions:", transformed_expressions)
 
     for expr in transformed_expressions:
         if len(expr[0]) == 3:
@@ -217,49 +215,79 @@ def translate_return_stmt(return_stmt, out):
     # Obtener la última expresión transformada
     final_var = transformed_expressions[-1][1] if transformed_expressions else None
 
-    if final_var:
-        out.write(f"\tret i32 {final_var}\n")
+    return final_var
 
 
 def translate_if_stmt(if_stmt, out):
     condition = get_property(if_stmt, "condition")
     blocks = get_property(if_stmt, "block")
     return_var = get_temp_var()
+    false_label_placeholder = "##"
 
+    # Reserva espacio para la variable de retorno
     out.write(f"\t{return_var} = alloca i32, align 4\n")
 
-    # Manejamos la condicional
+    # Traduce la condición del if
     condition_expr = translate_condition(condition, out)
-    print("Condition:", condition_expr)
-    
     comp_var = get_temp_var()
-    label_var = [get_temp_var(), get_temp_var()]
-    out.write(f"\t{comp_var} = {get_comparison_operator_name(condition_expr[1])} i32 {condition_expr[0]}, {condition_expr[2]}\n")
-    out.write(f"\tbr i1 {comp_var}, label {label_var[0]}, label {label_var[1]}\n")
+    true_label = get_temp_var()
 
-    return_label = get_temp_var()
+    # Genera la comparación basada en la condición
+    out.write(
+        f"\t{comp_var} = {get_comparison_operator_name(condition_expr[1])} i32 {condition_expr[0]}, {condition_expr[2]}\n"
+    )
+    out.write(f"\tbr i1 {comp_var}, label {true_label}, label {false_label_placeholder}\n")
 
-    index = 0
-    # Manejamos los labels
-    for block in blocks:
-        if block.children[0].data == "statement":
-            if block.children[0].children[0].data == "return_stmt":
-                label_value = interpret_number(label_var[index])
-                out.write(f"\n{label_value}:\n")
-                out.write(f"\tstore i32 {index}, ptr {return_var}, align 4\n")
-                out.write(f"\tbr label {return_label}\n")
-                index += 1
+    # Manejo del bloque "true"
+    out.write(f"\n{interpret_number(true_label)}:\n")
+    if isinstance(blocks, list):
+        false_label = translate_block(blocks[0], out, return_var)
+    else:
+        false_label = translate_block(blocks, out, return_var)
 
-    temp_var = get_temp_var()
-    out.write(f"\n{interpret_number(return_label)}:\n")
-    out.write(f"\t{temp_var} = load i32, ptr {return_var}, align 4\n")
-    out.write(f"\tret i32 {temp_var}\n")
+    # Manejo del bloque "false" (si existe)
+    if isinstance(blocks, list):
+        end_label = get_temp_var()
+        out.write(f"\tbr label {end_label}\n")
 
-    # # Manejamos los bloques
-    # for block in blocks:
-    #     if block.children[0].data == "statement":
-    #         translate_statement(block.children[0], out)
+        out.write(f"\n{interpret_number(false_label)}:\n")
+        final_var = translate_block(blocks[1], out, return_var)
+        out.write(f"\tbr label {end_label}\n")
 
+    else:
+        end_label = false_label
+        out.write(f"\tbr label {end_label}\n")
+        final_var = get_temp_var()
+
+    # Finaliza el bloque
+    out.write(f"\n{interpret_number(end_label)}:\n")
+    out.write(f"\t{final_var} = load i32, ptr {return_var}, align 4\n")
+
+    # Reabrimos el archivo y reemplazamos el marcador de posición
+    out.flush()  # Aseguramos que todo está escrito al disco
+    with open(out.name, "r+") as f:
+        content = f.read()
+        # Reemplaza el marcador de posición con el valor correcto
+        updated_content = content.replace(false_label_placeholder, false_label)
+        # Sobrescribe el archivo con el nuevo contenido
+        f.seek(0)
+        f.write(updated_content)
+        f.truncate()
+
+    return final_var
+    
+
+def translate_block(block, out, return_var):
+    """
+    Traduce un bloque de código y actualiza la variable de retorno si es necesario.
+    """
+    for statement in block.children:
+        if statement.data == "statement" and statement.children[0].data == "return_stmt":
+            return_value = translate_return_stmt(statement.children[0], out)
+            out.write(f"\tstore i32 {return_value}, ptr {return_var}, align 4\n")
+            return get_temp_var()
+        else:
+            translate_statement(statement, out)
 
 def interpret_number(str):
     return int(re.search(r'\d+', str).group(0)) if re.search(r'\d+', str) else 0
@@ -276,7 +304,10 @@ def translate_expr(expr, out):
         else:
             print("Tipo inesperado de expresión:", type(child))
 
+    if len(expr_def) == 1:
+        return expr_def[0]
     return expr_def
+
 
 def translate_term(term, out):
     term_def = []
@@ -288,7 +319,6 @@ def translate_term(term, out):
         else:
             print("Tipo inesperado de término:", type(child))
 
-    # print("AAAAAAAA:", term_def)
     if len(term_def) == 1:
         return term_def[0]
     
@@ -302,11 +332,9 @@ def translate_factor(factor, out):
             if child.data == "func_call":
                 # Manejo de llamadas a funciones
                 function_name = get_property(child, "name").children[0].children[0].value
-
-                # args_values = [translate_expr(arg, out) for arg in child.children if isinstance(arg, Tree) and arg.data == "expr"]
-                args_values = get_property(child, "expr")
-
-                args_values = [str(translate_expr(arg, out)[0]) for arg in child.children if isinstance(arg, Tree) and arg.data == "expr"]
+                
+                args_values = []
+                args_values.append(translate_return_stmt(child, out))
 
                 args_string = ", ".join(f"i32 noundef {arg}" for arg in args_values)
 
@@ -322,18 +350,18 @@ def translate_factor(factor, out):
                     if arg[0] == variable_name:
                         var = arg[1]  # Apuntador actual del argumento
 
-                # Generar nueva variable temporal para la carga
-                temp_var = get_temp_var()
-                out.write(f"\t{temp_var} = load i32, ptr {var}, align 4\n")
-                return temp_var  # Devuelve el nuevo nombre temporal generado
-
-            elif child.data == "expr":
-                return translate_expr(child, out)
+                        # Generar nueva variable temporal para la carga
+                        temp_var = get_temp_var()
+                        out.write(f"\t{temp_var} = load i32, ptr {var}, align 4\n")
+                        return temp_var
 
         elif isinstance(child, Token):
             if child.type == "NUMBER":
+                # Manejo directo de números
                 return child.value
-    return None  # Por defecto, si no encuentra nada
+
+    raise ValueError(f"Factor no reconocido: {factor}")
+
 
 
 def translate_condition(cond, out):
@@ -341,9 +369,8 @@ def translate_condition(cond, out):
     for child in cond.children:
         if isinstance(child, Tree):
             if child.data == "expr":
-                def_condition.append(translate_expr(child, out)[0])
+                def_condition.append(translate_expr(child, out))
         elif isinstance(child, Token):
-            print("\tValor:", child.value)
             def_condition.append(child.value)
     return def_condition
 

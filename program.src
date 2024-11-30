@@ -1,11 +1,11 @@
-function mayor3(x) {
-    if(x >= 3){
-        return 1;
+function factorial(x) {
+    if (x > 0) {
+        return x * factorial(x - 1);
     } else {
-        return 0;
+        return 1;
     }
 }
 
 function main() {
-  return mayor3(2);
+  return factorial(4);
 }
