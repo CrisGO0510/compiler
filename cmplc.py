@@ -92,9 +92,9 @@ def get_comparison_operator_name(operator):
 
 temp_var_counter = 0 # Contador para las variables temporales (2 porque %1 esta reservado)
 
-def get_temp_var():
+def get_temp_var(isParam=False):
     global temp_var_counter
-    if temp_var_counter == 1:
+    if temp_var_counter == 1 and not isParam:
         temp_var_counter += 1
     temp_var_counter += 1
     return f"%{temp_var_counter - 1}"
@@ -138,8 +138,11 @@ def translate_funcdef(ast, out, index):
     global arg_names
     for arg in arguments.children:
         if isinstance(arg, Tree):
-            arg_names.append([arg.children[0].value, get_temp_var()])
-        
+            arg_names.append([arg.children[0].value, get_temp_var(True)])
+    
+    # Por alguna razón después de los argumentos hay q dejar una instancia
+    get_temp_var(True)
+
     # Escribir la definición de la función
     out.write("define dso_local i32 @")
     out.write(function_name)
@@ -173,7 +176,7 @@ def translate_funcdef(ast, out, index):
 
     out.write("}\n\n")
     global temp_var_counter
-    temp_var_counter = 2
+    temp_var_counter = 0
     arg_names = []
 
 
@@ -282,12 +285,16 @@ def translate_block(block, out, return_var):
     Traduce un bloque de código y actualiza la variable de retorno si es necesario.
     """
     for statement in block.children:
-        if statement.data == "statement" and statement.children[0].data == "return_stmt":
-            return_value = translate_return_stmt(statement.children[0], out)
-            out.write(f"\tstore i32 {return_value}, ptr {return_var}, align 4\n")
-            return get_temp_var()
-        else:
-            translate_statement(statement, out)
+        if statement.data == "statement":
+            if statement.children[0].data == "return_stmt":
+                return_value = translate_return_stmt(statement.children[0], out)
+                out.write(f"\tstore i32 {return_value}, ptr {return_var}, align 4\n")
+                return get_temp_var()
+            elif statement.children[0].data == "if_stmt":
+                return_value = translate_if_stmt(statement.children[0], out)
+                return get_temp_var()
+
+
 
 def interpret_number(str):
     return int(re.search(r'\d+', str).group(0)) if re.search(r'\d+', str) else 0
@@ -333,10 +340,17 @@ def translate_factor(factor, out):
                 # Manejo de llamadas a funciones
                 function_name = get_property(child, "name").children[0].children[0].value
                 
-                args_values = []
-                args_values.append(translate_return_stmt(child, out))
+                expr_children = get_property(child, "expr")
+                return_expr = []
+                
+                
+                if isinstance(expr_children, Tree):
+                    return_expr.append(translate_return_stmt(child, out))
+                else:
+                    for arg in expr_children:
+                        return_expr.append(translate_expr(arg, out))
 
-                args_string = ", ".join(f"i32 noundef {arg}" for arg in args_values)
+                args_string = ", ".join(f"i32 noundef {arg}" for arg in return_expr)
 
                 temp_var = get_temp_var()
                 out.write(f"\t{temp_var} = call i32 @{function_name}({args_string})\n")
