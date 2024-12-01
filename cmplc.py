@@ -212,7 +212,7 @@ def translate_return_stmt(return_stmt, out):
     transformed_expressions = []
 
     # Si la expresión de retorno es una variable
-    if isinstance(return_expr, str):
+    if isinstance(return_expr, str) or isinstance(return_expr, int):
         return return_expr
 
     traverse_expression([return_expr], transformed_expressions)
