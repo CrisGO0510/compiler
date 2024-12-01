@@ -2,12 +2,14 @@ function evaluarCondiciones(cond1, cond2) {
    if (cond1 != 0) {  //Primer if
        if (cond2 != 0) {  //Segundo if anidado
            return 1;
+       } else {
+        return 0;
        }
-   }
-
+   } else {
     return 0;
+    }
 }
 
 function main() {
-    return evaluarCondiciones(1, 2);
+    return evaluarCondiciones(1, 0);
 }

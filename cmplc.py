@@ -170,9 +170,15 @@ def translate_funcdef(ast, out, index):
 
 
     block = get_property(ast, "block")
+    statement_return = []
     for child in block.children:
         if child.data == "statement":
-            out.write(f"\tret i32 {translate_statement(child, out)}\n")
+            statement_return.append(translate_statement(child, out))
+
+    if len(statement_return) == 1:
+        out.write(f"\tret i32 {statement_return[0]}\n")
+    else:
+        out.write(f"\tret i32 {statement_return[0]}\n")
 
     out.write("}\n\n")
     global temp_var_counter
@@ -221,19 +227,23 @@ def translate_return_stmt(return_stmt, out):
     return final_var
 
 
-def translate_if_stmt(if_stmt, out):
+def translate_if_stmt(if_stmt, out, save_var=None):
     condition = get_property(if_stmt, "condition")
     blocks = get_property(if_stmt, "block")
-    return_var = get_temp_var()
-    false_label_placeholder = "##"
+    if save_var is None:
+        return_var = get_temp_var()
+    else:
+        return_var = save_var
 
     # Reserva espacio para la variable de retorno
-    out.write(f"\t{return_var} = alloca i32, align 4\n")
+    if save_var is None:
+        out.write(f"\t{return_var} = alloca i32, align 4\n")
 
     # Traduce la condición del if
     condition_expr = translate_condition(condition, out)
     comp_var = get_temp_var()
     true_label = get_temp_var()
+    false_label_placeholder = "##" + str(comp_var)
 
     # Genera la comparación basada en la condición
     out.write(
@@ -263,8 +273,12 @@ def translate_if_stmt(if_stmt, out):
         final_var = get_temp_var()
 
     # Finaliza el bloque
-    out.write(f"\n{interpret_number(end_label)}:\n")
-    out.write(f"\t{final_var} = load i32, ptr {return_var}, align 4\n")
+    if save_var is None:
+        out.write(f"\n{interpret_number(end_label)}:\n")
+        out.write(f"\t{final_var} = load i32, ptr {return_var}, align 4\n")
+    else:
+        print("save_var", save_var)
+        out.write(f"\n{interpret_number(end_label)}:\n")
 
     # Reabrimos el archivo y reemplazamos el marcador de posición
     out.flush()  # Aseguramos que todo está escrito al disco
@@ -291,7 +305,8 @@ def translate_block(block, out, return_var):
                 out.write(f"\tstore i32 {return_value}, ptr {return_var}, align 4\n")
                 return get_temp_var()
             elif statement.children[0].data == "if_stmt":
-                return_value = translate_if_stmt(statement.children[0], out)
+                print("return_value", return_var)
+                return_value = translate_if_stmt(statement.children[0], out, return_var)
                 return get_temp_var()
 
 
