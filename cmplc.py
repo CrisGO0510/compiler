@@ -55,7 +55,7 @@ c_grammar = r"""
     CNAME_WITH_NUMBER: /[a-zA-Z]+[a-zA-Z0-9]*/
 
     // Regla para números
-    NUMBER: /[0-9]+/
+    NUMBER: /[+-]?[0-9]+/
 
     %ignore " "       // Ignorar espacios simples
     %ignore /\r?\n/   // Ignorar saltos de línea
@@ -328,7 +328,17 @@ def translate_expr(expr, out):
 
     if len(expr_def) == 1:
         return expr_def[0]
+    
+    if isInt(expr_def[0]) and isInt(expr_def[2]):
+        return eval(''.join(expr_def))
+
     return expr_def
+
+
+def isInt(cadena):
+    if cadena.startswith(('+', '-')):
+        return cadena[1:].isdigit()
+    return cadena.isdigit()
 
 
 def translate_term(term, out):
@@ -390,7 +400,6 @@ def translate_factor(factor, out):
                 return child.value
 
     raise ValueError(f"Factor no reconocido: {factor}")
-
 
 
 def translate_condition(cond, out):
